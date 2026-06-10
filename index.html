@@ -1,0 +1,55 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>XI clone — DICE PUZZLE</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div id="app">
+  <header id="hud">
+    <div class="hud-item">
+      <span class="hud-label">SCORE</span>
+      <span class="hud-value" id="score">0</span>
+    </div>
+    <div class="hud-item">
+      <span class="hud-label">BEST</span>
+      <span class="hud-value" id="best">0</span>
+    </div>
+    <div class="hud-item">
+      <span class="hud-label">CHAIN</span>
+      <span class="hud-value" id="chain">-</span>
+    </div>
+  </header>
+
+  <div id="viewport">
+    <div id="stage">
+      <div id="board"></div>
+    </div>
+    <div id="message">
+      <h1 id="message-title">DICE PUZZLE</h1>
+      <p id="message-body">
+        サイコロの上を歩いて転がそう。<br>
+        同じ目が「目の数」以上つながると消える。<br>
+        <span class="key">↑↓←→</span> / <span class="key">WASD</span> 移動 ・ <span class="key">R</span> リスタート
+      </p>
+      <button id="start-btn">START</button>
+    </div>
+    <div id="popups"></div>
+  </div>
+
+  <div id="dpad">
+    <button class="dpad-btn" data-dir="up" style="grid-area:u">▲</button>
+    <button class="dpad-btn" data-dir="left" style="grid-area:l">◀</button>
+    <button class="dpad-btn" data-dir="right" style="grid-area:r">▶</button>
+    <button class="dpad-btn" data-dir="down" style="grid-area:d">▼</button>
+  </div>
+
+  <footer id="help">
+    上に乗って歩くとサイコロが転がる ／ 地上から押すと転がせる ／ 同じ目を目の数だけ繋げろ（1は単独で消える）
+  </footer>
+</div>
+<script src="game.js"></script>
+</body>
+</html>
