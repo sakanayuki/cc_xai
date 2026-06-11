@@ -4,7 +4,7 @@ PlayStation の名作パズル **XI [sái]（Devil Dice）** にインスパイ�
 ビルド不要の純粋な静的サイト（HTML / CSS / Vanilla JavaScript）なので、GitHub Pages でそのまま公開できます。
 
 ## 遊び方
-
+[Github Pages](https://sakanayuki.github.io/cc_xai/)
 - **↑↓←→ / WASD** … 移動
 - **R** … リスタート
 - スマホではタッチ用の十字キーが表示されます
