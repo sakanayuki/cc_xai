@@ -15,7 +15,7 @@
 const COLS = 8;
 const ROWS = 8;
 const ROLL_MS = 150;
-const SINK_MS = 2400;
+const SINK_MS = 3000;  // 完全に沈み切るまでの時間
 const RISE_MS = 260;
 const GHOST_MS = 1600;
 const MOVE_COOLDOWN = 130;
@@ -244,11 +244,7 @@ function commitRoll(d) {
 }
 
 /* ---------- match / sink / chain ---------- */
-function resolveMatches(d) {
-  if (d.state !== "idle") return;
-  const f = d.top;
-
-  // 同じ目の idle クラスタを BFS で収集
+function collectCluster(d) {
   const cluster = [];
   const visited = new Set([d.id]);
   const queue = [d];
@@ -256,11 +252,31 @@ function resolveMatches(d) {
     const cur = queue.pop();
     cluster.push(cur);
     for (const nb of neighborsOf(cur)) {
-      if (nb.state === "idle" && nb.top === f && !visited.has(nb.id)) {
+      if (nb.state === "idle" && nb.top === d.top && !visited.has(nb.id)) {
         visited.add(nb.id);
         queue.push(nb);
       }
     }
+  }
+  return cluster;
+}
+
+function resolveMatches(d) {
+  if (d.state !== "idle") return;
+  const f = d.top;
+  const cluster = collectCluster(d);
+
+  if (f === 1) {
+    // 1 は単独では消えない。沈下中のサイコロ(目を問わず)に
+    // 隣接させたときだけ、盤上の 1 がすべて道連れで消える
+    let group = null;
+    for (const c of cluster) {
+      for (const nb of neighborsOf(c)) {
+        if (nb.state === "sinking") group = nb.sink.group;
+      }
+    }
+    if (group) vanishOnes(group, d);
+    return;
   }
 
   // 沈下中の同じ目のグループに隣接していれば連鎖参加
@@ -271,36 +287,62 @@ function resolveMatches(d) {
     }
   }
 
-  const now = performance.now();
   if (joinGroup) {
     joinGroup.chain++;
-    // グループ全体の消滅タイマーをリセットして一緒に沈める
-    for (const member of joinGroup.dice) member.sink.start = now;
-    startSink(cluster, joinGroup, now);
+    reviveGroup(joinGroup);
+    startSink(cluster, joinGroup);
     const pts = f * 100 * cluster.length * joinGroup.chain;
     addScore(pts);
     chainEl.textContent = "x" + joinGroup.chain;
     popupAtDie(d, `CHAIN x${joinGroup.chain} +${pts}`, true);
-  } else if (f === 1) {
-    const group = { face: 1, chain: 1, dice: [] };
-    startSink(cluster, group, now);
-    addScore(100 * cluster.length);
-    popupAtDie(d, `+${100 * cluster.length}`, false);
+    checkAdjacentOnes(joinGroup);
   } else if (cluster.length >= f) {
     const group = { face: f, chain: 1, dice: [] };
-    startSink(cluster, group, now);
+    startSink(cluster, group);
     const pts = f * cluster.length * 100;
     addScore(pts);
     popupAtDie(d, `${f} x ${cluster.length}! +${pts}`, false);
+    checkAdjacentOnes(group);
   }
 }
 
-function startSink(cluster, group, now) {
+// 沈み始めた/育ったグループの隣に 1 があれば、盤上の 1 を全消し
+function checkAdjacentOnes(group) {
+  for (const m of group.dice) {
+    for (const nb of neighborsOf(m)) {
+      if (nb.state === "idle" && nb.top === 1) {
+        vanishOnes(group, nb);
+        return;
+      }
+    }
+  }
+}
+
+function vanishOnes(group, origin) {
+  const ones = dice.filter(v => v.state === "idle" && v.top === 1);
+  if (ones.length === 0) return;
+  group.chain++;
+  reviveGroup(group);
+  startSink(ones, group);
+  const pts = 100 * ones.length * group.chain;
+  addScore(pts);
+  chainEl.textContent = "x" + group.chain;
+  popupAtDie(origin, `1 ALL! +${pts}`, true);
+}
+
+function startSink(cluster, group) {
   for (const d of cluster) {
     d.state = "sinking";
-    d.sink = { start: now, group };
+    d.sink = { depth: 0, mode: "sinking", group };
     d.el.classList.add("sinking");
     group.dice.push(d);
+  }
+}
+
+// 連鎖参加時、沈みかけのグループを一旦せり上がらせて延命する
+function reviveGroup(group) {
+  for (const m of group.dice) {
+    if (m.state === "sinking") m.sink.mode = "rising";
   }
 }
 
@@ -338,7 +380,9 @@ function trySpawn(now) {
   const { x, y } = cells[(Math.random() * cells.length) | 0];
   const el = document.createElement("div");
   el.className = "ghost";
-  el.style.transform = `translate3d(${x * CELL}px, ${y * CELL}px, 1px)`;
+  // transform は点滅アニメーションに上書きされるため left/top で配置する
+  el.style.left = x * CELL + "px";
+  el.style.top = y * CELL + "px";
   boardEl.appendChild(el);
   ghosts.push({ x, y, t0: now, el });
 }
@@ -355,15 +399,23 @@ function materialize(g) {
     const c = cells[(Math.random() * cells.length) | 0];
     g.x = c.x; g.y = c.y;
   }
-  addDie(g.x, g.y, randomOrientation(true));
+  addDie(g.x, g.y, randomOrientation(false));
 }
 
+// 開始直後はゆっくり、プレイ時間に応じて徐々に速くなる
 function spawnInterval(now) {
   const elapsedSec = (now - startTime) / 1000;
-  return Math.max(1400, 3400 - elapsedSec * 18);
+  return Math.max(1500, 5500 - elapsedSec * 20);
 }
 
 /* ---------- player movement ---------- */
+// 半分以上沈んだサイコロには乗り移れない
+function canStandOn(d) {
+  if (!d) return false;
+  if (d.state === "idle") return true;
+  return d.state === "sinking" && d.sink.depth < CELL / 2;
+}
+
 function tryMove(dir) {
   const { dx, dy } = DIRS[dir];
   const tx = player.x + dx, ty = player.y + dy;
@@ -377,7 +429,7 @@ function tryMove(dir) {
         startRoll(here, dir, true);
         return true;
       }
-      if (target.state === "idle" || target.state === "sinking") {
+      if (canStandOn(target)) {
         player.x = tx; player.y = ty;
         updatePlayerEl();
         return true;
@@ -388,7 +440,8 @@ function tryMove(dir) {
         updatePlayerEl();
         return true;
       }
-      if (target.state === "idle" || target.state === "sinking") {
+      // 自分の足場が半分以上沈むと隣へは乗り移れない
+      if (here.sink.depth < CELL / 2 && canStandOn(target)) {
         player.x = tx; player.y = ty;
         updatePlayerEl();
         return true;
@@ -415,6 +468,11 @@ function tryMove(dir) {
     }
     return true;
   }
+  if (canStandOn(target)) {  // 沈みかけのサイコロにも半分までは登れる
+    player.x = tx; player.y = ty; player.riding = true;
+    updatePlayerEl();
+    return true;
+  }
   return false;
 }
 
@@ -427,7 +485,11 @@ function processInput(now) {
 }
 
 /* ---------- main loop ---------- */
+let lastFrameAt = 0;
+
 function frame(now) {
+  const dt = Math.min(50, now - (lastFrameAt || now));
+  lastFrameAt = now;
   if (running) {
     // 転がり
     for (const d of dice) {
@@ -454,17 +516,29 @@ function frame(now) {
         placeDieEl(d, -CELL * (1 - p));
       }
     }
-    // 沈下
+    // 沈下: 一定速度で地面に潜っていく(連鎖時は一旦せり上がる)
+    const dz = (dt / SINK_MS) * CELL;
     for (const d of [...dice]) {
       if (d.state !== "sinking") continue;
-      const p = (now - d.sink.start) / SINK_MS;
-      if (p >= 1) {
+      const s = d.sink;
+      if (s.mode === "rising") {
+        s.depth -= dz * 3;
+        if (s.depth <= 0) { s.depth = 0; s.mode = "sinking"; }
+      } else {
+        s.depth += dz;
+      }
+      if (s.depth >= CELL) {
         removeDie(d);
         chainEl.textContent = "-";
-      } else if (p > 0.5) {
-        const q = (p - 0.5) / 0.5;
-        placeDieEl(d, -CELL * 1.05 * q);
-        d.el.style.opacity = String(1 - q * 0.7);
+        continue;
+      }
+      placeDieEl(d, -s.depth);
+      d.el.style.opacity =
+        s.depth > CELL * 0.8 ? String(1 - (s.depth / CELL - 0.8) * 3) : "1";
+      // 上に乗っているプレイヤーも一緒に沈む
+      if (player.riding && player.x === d.x && player.y === d.y) {
+        player.el.style.transform =
+          `translate3d(${player.x * CELL}px, ${player.y * CELL}px, ${CELL - s.depth}px)`;
       }
     }
     // 湧き
@@ -517,12 +591,12 @@ function startGame() {
     const x = (Math.random() * COLS) | 0;
     const y = (Math.random() * ROWS) | 0;
     if (gridAt(x, y)) continue;
-    const d = addDie(x, y, randomOrientation(true));
+    const d = addDie(x, y, randomOrientation(false));
     d.state = "idle";
     placeDieEl(d);
     let guard = 0;
     while (wouldMatch(d) && guard++ < 30) {
-      Object.assign(d, randomOrientation(true));
+      Object.assign(d, randomOrientation(false));
       setFaces(d);
     }
     placed++;
@@ -535,7 +609,7 @@ function startGame() {
   updatePlayerEl();
 
   startTime = performance.now();
-  nextSpawnAt = startTime + 2500;
+  nextSpawnAt = startTime + 5000;
   rollLockUntil = 0;
   nextMoveAt = 0;
   running = true;
@@ -543,7 +617,7 @@ function startGame() {
 }
 
 function wouldMatch(d) {
-  if (d.top === 1) return true;
+  if (d.top === 1) return false;  // 1 は単独では消えないルール
   let count = 1;
   const visited = new Set([d.id]);
   const queue = [d];
@@ -624,7 +698,8 @@ window.addEventListener("resize", () => {
   readCell();
   for (const d of dice) if (d.state === "idle") placeDieEl(d);
   for (const g of ghosts) {
-    g.el.style.transform = `translate3d(${g.x * CELL}px, ${g.y * CELL}px, 1px)`;
+    g.el.style.left = g.x * CELL + "px";
+    g.el.style.top = g.y * CELL + "px";
   }
   if (player.el) updatePlayerEl();
 });
