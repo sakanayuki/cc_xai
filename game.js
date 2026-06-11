@@ -113,6 +113,9 @@ const idx = (x, y) => y * COLS + x;
 const inBounds = (x, y) => x >= 0 && x < COLS && y >= 0 && y < ROWS;
 const gridAt = (x, y) => grid[idx(x, y)];
 
+// 黄色い点滅枠のマスは"出現予約"扱いで、サイコロは進入できない
+const ghostAt = (x, y) => ghosts.some(g => g.x === x && g.y === y);
+
 function neighborsOf(d) {
   const out = [];
   for (const { dx, dy } of Object.values(DIRS)) {
@@ -314,26 +317,12 @@ function resolveMatches(d) {
     addScore(pts);
     chainEl.textContent = "x" + joinGroup.chain;
     popupAtDie(d, `CHAIN x${joinGroup.chain} +${pts}`, true);
-    checkAdjacentOnes(joinGroup);
   } else if (cluster.length >= f) {
     const group = { face: f, chain: 1, dice: [] };
     startSink(cluster, group);
     const pts = f * cluster.length * 100;
     addScore(pts);
     popupAtDie(d, `${f} x ${cluster.length}! +${pts}`, false);
-    checkAdjacentOnes(group);
-  }
-}
-
-// 沈み始めた/育ったグループの隣に 1 があれば、盤上の 1 を全消し
-function checkAdjacentOnes(group) {
-  for (const m of group.dice) {
-    for (const nb of neighborsOf(m)) {
-      if (nb.state === "idle" && nb.top === 1) {
-        vanishOnes(group, nb);
-        return;
-      }
-    }
   }
 }
 
@@ -449,6 +438,7 @@ function tryMove(dir) {
   if (player.riding && here) {
     if (here.state === "idle") {
       if (!target) {
+        if (ghostAt(tx, ty)) return false;  // 出現予約マスには転がせない
         startRoll(here, dir, true);
         return true;
       }
@@ -459,9 +449,13 @@ function tryMove(dir) {
       }
     } else if (here.state === "sinking") {
       if (!target) {
-        player.x = tx; player.y = ty; player.riding = false;
-        updatePlayerEl();
-        return true;
+        // 半分沈むまでは地面に飛び降りられない(誤入力での落下防止)
+        if (here.sink.depth >= CELL / 2) {
+          player.x = tx; player.y = ty; player.riding = false;
+          updatePlayerEl();
+          return true;
+        }
+        return false;
       }
       // 自分の足場が半分以上沈むと隣へは乗り移れない
       if (here.sink.depth < CELL / 2 && canStandOn(target)) {
@@ -482,7 +476,7 @@ function tryMove(dir) {
   }
   if (target.state === "idle") {
     const bx = tx + dx, by = ty + dy;
-    if (inBounds(bx, by) && !gridAt(bx, by)) {
+    if (inBounds(bx, by) && !gridAt(bx, by) && !ghostAt(bx, by)) {
       startSlide(target, dir);
       player.x = tx; player.y = ty;
       updatePlayerEl();
