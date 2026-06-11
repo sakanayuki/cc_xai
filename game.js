@@ -15,7 +15,7 @@
 const COLS = 8;
 const ROWS = 8;
 const ROLL_MS = 150;
-const SINK_MS = 3000;  // 完全に沈み切るまでの時間
+const SINK_MS = 4500;  // 完全に沈み切るまでの時間
 const RISE_MS = 260;
 const GHOST_MS = 1600;
 const MOVE_COOLDOWN = 130;
@@ -232,6 +232,25 @@ function startRoll(d, dir, withPlayer) {
   }
 }
 
+// 地上からの押し出し: 回転せず出目を保ったまま横に滑る
+function startSlide(d, dir) {
+  const { dx, dy } = DIRS[dir];
+  d.state = "sliding";
+  d.slide = { fromX: d.x, fromY: d.y, t0: performance.now() };
+  grid[idx(d.x, d.y)] = null;
+  d.x += dx;
+  d.y += dy;
+  grid[idx(d.x, d.y)] = d;
+  rollLockUntil = d.slide.t0 + ROLL_MS;
+}
+
+function commitSlide(d) {
+  d.state = "idle";
+  d.slide = null;
+  placeDieEl(d);
+  resolveMatches(d);
+}
+
 function commitRoll(d) {
   const s = rollState(d, d.roll.dir);
   d.top = s.top; d.north = s.north; d.east = s.east;
@@ -389,8 +408,8 @@ function trySpawn(now) {
 
 function materialize(g) {
   g.el.remove();
-  if (gridAt(g.x, g.y) || (player.x === g.x && player.y === g.y)) {
-    // 塞がっていたら別の空きマスへ移す
+  if (gridAt(g.x, g.y)) {
+    // サイコロで塞がっていたら別の空きマスへ移す
     const cells = emptyCells(true);
     if (cells.length === 0) {
       if (emptyCells(false).length === 0) gameOver();
@@ -400,6 +419,10 @@ function materialize(g) {
     g.x = c.x; g.y = c.y;
   }
   addDie(g.x, g.y, randomOrientation(false));
+  // 枠の上に立っていたプレイヤーは湧くサイコロに持ち上げられる
+  if (!player.riding && player.x === g.x && player.y === g.y) {
+    player.riding = true;
+  }
 }
 
 // 開始直後はゆっくり、プレイ時間に応じて徐々に速くなる
@@ -450,7 +473,8 @@ function tryMove(dir) {
     return false;
   }
 
-  // 地上
+  // 地上: 押すと出目を保ったまま滑る。歩いて登ることはできない
+  // (上に乗るには黄色い枠の上に立ち、湧くサイコロに持ち上げてもらう)
   if (!target) {
     player.x = tx; player.y = ty;
     updatePlayerEl();
@@ -459,19 +483,11 @@ function tryMove(dir) {
   if (target.state === "idle") {
     const bx = tx + dx, by = ty + dy;
     if (inBounds(bx, by) && !gridAt(bx, by)) {
-      startRoll(target, dir, false);  // 押して転がす
+      startSlide(target, dir);
       player.x = tx; player.y = ty;
       updatePlayerEl();
-    } else {
-      player.x = tx; player.y = ty; player.riding = true;  // 登る
-      updatePlayerEl();
+      return true;
     }
-    return true;
-  }
-  if (canStandOn(target)) {  // 沈みかけのサイコロにも半分までは登れる
-    player.x = tx; player.y = ty; player.riding = true;
-    updatePlayerEl();
-    return true;
   }
   return false;
 }
@@ -504,16 +520,36 @@ function frame(now) {
           ROLL_TRANSFORM[d.roll.dir].rotate(p);
       }
     }
+    // 滑り(地上からの押し出し)
+    for (const d of dice) {
+      if (d.state !== "sliding") continue;
+      const p = (now - d.slide.t0) / ROLL_MS;
+      if (p >= 1) {
+        commitSlide(d);
+      } else {
+        const x = (d.slide.fromX + (d.x - d.slide.fromX) * p) * CELL;
+        const y = (d.slide.fromY + (d.y - d.slide.fromY) * p) * CELL;
+        d.el.style.transform = `translate3d(${x}px, ${y}px, 0)`;
+      }
+    }
     // せり上がり
     for (const d of dice) {
       if (d.state !== "rising") continue;
       const p = (now - d.riseStart) / RISE_MS;
+      const lifting =
+        player.riding && player.x === d.x && player.y === d.y;
       if (p >= 1) {
         d.state = "idle";
         placeDieEl(d);
+        if (lifting) updatePlayerEl();
         resolveMatches(d);
       } else {
         placeDieEl(d, -CELL * (1 - p));
+        // 黄色い枠の上に立っていたプレイヤーを持ち上げる
+        if (lifting) {
+          player.el.style.transform =
+            `translate3d(${player.x * CELL}px, ${player.y * CELL}px, ${CELL * p}px)`;
+        }
       }
     }
     // 沈下: 一定速度で地面に潜っていく(連鎖時は一旦せり上がる)
