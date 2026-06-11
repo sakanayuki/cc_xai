@@ -632,10 +632,9 @@ function startGame() {
     placed++;
   }
 
-  // プレイヤーは空きマスへ
-  const cells = emptyCells(false);
-  const c = cells[(Math.random() * cells.length) | 0];
-  player.x = c.x; player.y = c.y; player.riding = false;
+  // プレイヤーはいずれかのサイコロの上からスタート
+  const start = dice[(Math.random() * dice.length) | 0];
+  player.x = start.x; player.y = start.y; player.riding = true;
   updatePlayerEl();
 
   startTime = performance.now();
